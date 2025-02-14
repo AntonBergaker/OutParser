@@ -1,0 +1,6 @@
+﻿namespace OutParser;
+
+public static class InitializationContent {
+    public static string GetContent() =>
+"""
+#nullable enable
