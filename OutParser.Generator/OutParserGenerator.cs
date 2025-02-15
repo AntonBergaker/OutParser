@@ -11,10 +11,9 @@ namespace OutParser.Generator;
 
 [Generator]
 public class OutParserGenerator : IIncrementalGenerator {
-    private const string ParseMethodName = "InterpolatedParsing.InterpolatedParser.Parse(string, InterpolatedParsing.InterpolatedParser.InterpolatedParseStringHandler)";
+    private const string ParseMethodName = "OutParsing.OutParser.Parse";
 
     public void Initialize(IncrementalGeneratorInitializationContext context) {
-        //Debugger.Launch();
         context.RegisterPostInitializationOutput(InitializationOutput);
 
         var interpolationCalls = context.SyntaxProvider.CreateSyntaxProvider(FindParseCalls, FindParseCallsTransform).NotNull().Collect();
@@ -39,7 +38,8 @@ public class OutParserGenerator : IIncrementalGenerator {
             codeBuilder.StartBlock($"public static void Parse<{typeParameters}>(string input, string template, {outParameters})");
             for (int j = 0; j < i; j++) {
                 codeBuilder.AddLine($"value{j} = default!;");
-            } 
+            }
+            codeBuilder.AddLine("throw new global::System.NotImplementedException(\"OutParser parse call is not implemented. This means the OutParser Generator was unable to emit any code. Please check your build output for errors.\");");
             codeBuilder.EndBlock();
         }
 
@@ -64,7 +64,7 @@ public class OutParserGenerator : IIncrementalGenerator {
         var symbolInfo = context.SemanticModel.GetSymbolInfo(context.Node, token);
 
         // Starts with Parse<
-        if (symbolInfo.Symbol?.ToDisplayString().StartsWith($"{ParseMethodName}<") ?? false) {
+        if ((symbolInfo.Symbol?.ToDisplayString().StartsWith($"{ParseMethodName}<") ?? false) == false) {
             return null;
         }
         if (operation.Arguments.Length <= 1) {
@@ -186,8 +186,11 @@ public class OutParserGenerator : IIncrementalGenerator {
     }
 
     private string GetSeparatorFromTemplate(string template) {
-        var last = template.LastIndexOf(':');
-        return template.Substring(last + 1);
+        var colonIndex = template.IndexOf(':');
+        if (colonIndex == -1) {
+            return "";
+        }
+        return template.Substring(colonIndex + 1);
     }
 
     private void EmitParseCallsCode(SourceProductionContext context, ImmutableArray<ParserCall> parserCalls) {
@@ -230,9 +233,11 @@ public class OutParserGenerator : IIncrementalGenerator {
 
         code.AddLine("""
         namespace System.Runtime.CompilerServices {
+        #pragma warning disable CS9113
         	[AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
         	file sealed class InterceptsLocationAttribute(int version, string data) : Attribute {
         	}
+        #pragma warning restore CS9113
         }
         """);
 

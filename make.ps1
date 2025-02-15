@@ -1,2 +1,3 @@
 dotnet build --configuration Release
-nuget pack .OutParser.Generator\OutParser.nuspec -Prop Configuration=Release
+cd .\OutParser.Generator
+nuget pack .\OutParser.nuspec -Prop Configuration=Release
