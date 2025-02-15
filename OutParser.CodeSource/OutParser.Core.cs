@@ -13,17 +13,52 @@
                 _templateComponents = templateComponents;
             }
 
-            public void GetParsable<T>(out T value) where T : global::System.IParsable<T> {
-                GetSpanParsableFunction(out value, static x => T.Parse(new string(x), null));
+            private static global::System.Func<global::System.ReadOnlySpan<char>, T> GetParsableConvertMethod<T>()
+                where T : global::System.IParsable<T> => 
+                static x => T.Parse(new string(x), System.Globalization.CultureInfo.InvariantCulture);
+
+            private static global::System.Func<global::System.ReadOnlySpan<char>, T> GetSpanParsableConvertMethod<T>()
+                where T : global::System.ISpanParsable<T> =>
+                static x => T.Parse(x, System.Globalization.CultureInfo.InvariantCulture);
+
+            public T GetParsable<T>() where T : global::System.IParsable<T> {
+                return GetSpanParsableFunction(GetParsableConvertMethod<T>());
             }
 
-            public void GetSpanParsable<T>(out T value) where T : global::System.ISpanParsable<T> {
-                GetSpanParsableFunction(out value, static x => T.Parse(x, null));
+            public T GetSpanParsable<T>() where T : global::System.ISpanParsable<T> {
+                return GetSpanParsableFunction(GetSpanParsableConvertMethod<T>());
             }
 
-            private void GetSpanParsableFunction<T>(out T value, global::System.Func<global::System.ReadOnlySpan<char>, T> parseFunction) {
+            private T GetSpanParsableFunction<T>(global::System.Func<global::System.ReadOnlySpan<char>, T> parseFunction) {
                 var nextString = GetNextPart();
-                value = parseFunction(nextString);
+                return parseFunction(nextString);
+            }
+
+            public global::System.Collections.Generic.List<T> GetParsableList<T>(string separator) where T : global::System.IParsable<T> {
+                return GetSpanParsableListFunction(GetParsableConvertMethod<T>(), separator);
+            }
+
+            public global::System.Collections.Generic.List<T> GetSpanParsableList<T>(string separator) where T : global::System.ISpanParsable<T> {
+                return GetSpanParsableListFunction(GetSpanParsableConvertMethod<T>(), separator);
+            }
+
+            private global::System.Collections.Generic.List<T> GetSpanParsableListFunction<T>(global::System.Func<global::System.ReadOnlySpan<char>, T> parseFunction, string separator) {
+                var chars = GetNextPart();
+                var list = new global::System.Collections.Generic.List<T>();
+
+                while (true) {
+                    int index = System.MemoryExtensions.IndexOf(chars, separator);
+                    if (index == -1) {
+                        list.Add(parseFunction(chars));
+                        break;
+                    }
+
+                    list.Add(parseFunction(chars[..index]));
+                    chars = chars[(index + separator.Length)..];
+
+                }
+
+                return list;
             }
 
             private global::System.ReadOnlySpan<char> GetNextPart() {

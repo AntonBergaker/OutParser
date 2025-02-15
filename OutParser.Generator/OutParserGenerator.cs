@@ -19,7 +19,7 @@ public class OutParserGenerator : IIncrementalGenerator {
 
         var interpolationCalls = context.SyntaxProvider.CreateSyntaxProvider(FindParseCalls, FindParseCallsTransform).NotNull().Collect();
 
-        context.RegisterSourceOutput(interpolationCalls, EmitParseCallsCode);
+        context.RegisterImplementationSourceOutput(interpolationCalls, EmitParseCallsCode);
 
     }
 
@@ -91,16 +91,9 @@ public class OutParserGenerator : IIncrementalGenerator {
 #pragma warning restore RSEXPERIMENTAL002 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 
 
-        List<TypeData> types = new();
-        foreach (var argument in operation.Arguments.Skip(2)) {
-            var typeData = GetTypeData(argument.Parameter?.Type);
-            if (typeData == null) {
-                return null;
-            }
-            types.Add(typeData);
-        }
-
         List<string> components = new();
+        List<string> templates = new();
+
         int startIndex = 0;
         while (true) {
             int open = FindNextNonDupeChar(stringValue, '{', startIndex);
@@ -112,12 +105,23 @@ public class OutParserGenerator : IIncrementalGenerator {
                 break;
             }
 
+            templates.Add(stringValue.Substring(open+1, close-1 - open));
             components.Add(stringValue.Substring(startIndex, open - startIndex));
 
             startIndex = close + 1;
         }
         if (startIndex < stringValue.Length) {
             components.Add(stringValue.Substring(startIndex, stringValue.Length - startIndex));
+        }
+
+        List<TypeData> types = new();
+        int index = 0;
+        foreach (var argument in operation.Arguments.Skip(2)) {
+            var typeData = GetTypeData(argument.Parameter?.Type, templates[index++]);
+            if (typeData == null) {
+                return null;
+            }
+            types.Add(typeData);
         }
 
         return new(types.ToArray(), components.ToArray(), location.Data);
@@ -142,26 +146,27 @@ public class OutParserGenerator : IIncrementalGenerator {
     /// </summary>
     /// <param name="type"></param>
     /// <returns></returns>
-    private TypeData? GetTypeData(ITypeSymbol? type) {
+    private TypeData? GetTypeData(ITypeSymbol? type, string template) {
         if (type == null) {
             return null;
         }
         var typeName = type.ToString();
-
+        string? listSeparator = null;
         TypeData? innerType = null;
 
         TypeDataKind kind = TypeDataKind.Parsable;
         if (type is IArrayTypeSymbol array) {
             kind = TypeDataKind.Array;
-
-            innerType = GetTypeData(array.ElementType);
+            listSeparator = GetSeparatorFromTemplate(template);
+            innerType = GetTypeData(array.ElementType, template);
         }
         else if (type.OriginalDefinition?.ToString() == "System.Collections.Generic.List<T>") {
             if (type is not INamedTypeSymbol namedType) {
                 return null;
             }
             kind = TypeDataKind.List;
-            innerType = GetTypeData(namedType.TypeArguments[0]);
+            listSeparator = GetSeparatorFromTemplate(template);
+            innerType = GetTypeData(namedType.TypeArguments[0], template);
         }
         else {
             var spanParsableString = $"System.ISpanParsable<{typeName}>";
@@ -177,7 +182,12 @@ public class OutParserGenerator : IIncrementalGenerator {
             kind = isSpanParsable ? TypeDataKind.SpanParsable : TypeDataKind.Parsable;
         }
 
-        return new(typeName, kind, innerType);
+        return new(typeName, listSeparator, kind, innerType);
+    }
+
+    private string GetSeparatorFromTemplate(string template) {
+        var last = template.LastIndexOf(':');
+        return template.Substring(last + 1);
     }
 
     private void EmitParseCallsCode(SourceProductionContext context, ImmutableArray<ParserCall> parserCalls) {
@@ -194,13 +204,21 @@ public class OutParserGenerator : IIncrementalGenerator {
             code.StartBlock($"public static void ParseIntercept{index++}(string input, string template, {outCalls})");
 
             code.AddLine("var instance = new OutParserInstance(input, [");
-            code.AddLine(string.Join(",", call.Components.Select(x => EscapeString(x))));
+            code.AddLine(string.Join(",", call.Components.Select(x => '\t' + EscapeString(x))));
             code.AddLine("]);");
 
             for (int typeIndex = 0; typeIndex < call.Types.Length; typeIndex++) {
                 TypeData type = call.Types[typeIndex];
-                var method = type.Kind == TypeDataKind.SpanParsable ? "GetSpanParsable" : "GetParsable";
-                code.AddLine($"instance.{method}(out value{typeIndex});");
+                var variableName = $"value{typeIndex}";
+                if (type.Kind is TypeDataKind.Parsable or TypeDataKind.SpanParsable) {
+                    var method = type.Kind == TypeDataKind.SpanParsable ? "GetSpanParsable" : "GetParsable";
+                    code.AddLine($"{variableName} = instance.{method}<{type.FullName}>();");
+                }
+                else if (type.Kind is TypeDataKind.Array or TypeDataKind.List) {
+                    var method = type.InnerType?.Kind == TypeDataKind.SpanParsable ? "GetSpanParsableList" : "GetParsableList";
+                    var convertMethod = type.Kind == TypeDataKind.Array ? ".ToArray()" : "";
+                    code.AddLine($"{variableName} = instance.{method}<{type.InnerType?.FullName}>({EscapeString(type.ListSeparator!)}){convertMethod};");
+                }
             }
 
             code.EndBlock();

@@ -38,4 +38,4 @@ public enum TypeDataKind {
     List,
 }
 
-internal record class TypeData(string FullName, TypeDataKind Kind, TypeData? InnerType);
+internal record class TypeData(string FullName, string? ListSeparator, TypeDataKind Kind, TypeData? InnerType);
