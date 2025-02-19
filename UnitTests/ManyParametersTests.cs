@@ -37,4 +37,16 @@ internal class ManyParametersTests {
         Assert.AreEqual(11, eleven);
         Assert.AreEqual(12, twelve);
     }
+
+    [Test]
+    public void OutOfOrderParameters() {
+        OutParser.Parse(
+            "Last I want blue, first I want red",
+            "Last I want {last}, first I want {first}",
+            out string first, out string last
+        );
+
+        Assert.AreEqual("red", first);
+        Assert.AreEqual("blue", last);
+    }
 }

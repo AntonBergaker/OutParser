@@ -2,6 +2,7 @@
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
+using Microsoft.CodeAnalysis.Text;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -34,9 +35,6 @@ public class OutParserGenerator : IIncrementalGenerator {
             var typeParameters = string.Join(", ", Enumerable.Range(0, i).Select(j => $"T{j}"));
             var outParameters = string.Join(", ", Enumerable.Range(0, i).Select(j => $"out T{j} value{j}"));
             codeBuilder.StartBlock($"public static void Parse<{typeParameters}>(string input, string template, {outParameters})");
-            for (int j = 0; j < i; j++) {
-                codeBuilder.AddLine($"value{j} = default!;");
-            }
             codeBuilder.AddLine("throw new global::System.NotImplementedException(\"OutParser parse call is not implemented. This means the OutParser Generator was unable to emit any code. Please check your build output for errors.\");");
             codeBuilder.EndBlock();
         }
@@ -55,9 +53,15 @@ public class OutParserGenerator : IIncrementalGenerator {
     }
 
     private class ParseCallReporter : IParserCallReporter {
-        public void ReportPatternRepeats(ILiteralOperation literalOperation, string template) { }
+        public void ReportPatternMissingOut(Location location, string key) { }
 
-        public void ReportTemplateNotLiteral(IOperation templateArgument) { }
+        public void ReportOutMissingPattern(Location location, string argumentName) { }
+
+        public void ReportPatternRepeats(Location location, string template) { }
+
+        public void ReportTemplateNotLiteral(Location location) { }
+
+        public void ReportTypeNotParsable(Location location, string name) { }
     }
 
     private ParserCall? FindParseCallsTransform(GeneratorSyntaxContext context, CancellationToken token) {
@@ -77,25 +81,33 @@ public class OutParserGenerator : IIncrementalGenerator {
                 return;
             }
             code.AddLine($"[System.Runtime.CompilerServices.InterceptsLocationAttribute(1, \"{call.InterceptLocation}\")]");
-            var outCalls = string.Join(", ", call.Types.Select((x, i) => $"out {x.FullName} value{i}"));
+            var outCalls = string.Join(", ", call.OutCalls.Select((x, i) => $"out {x.TypeData.FullName} value{i}"));
             code.StartBlock($"public static void ParseIntercept{index++}(string input, string template, {outCalls})");
 
             code.AddLine("var instance = new OutParserInstance(input, [");
             code.AddLine(string.Join(",", call.Components.Select(x => '\t' + EscapeString(x))));
             code.AddLine("]);");
 
-            for (int typeIndex = 0; typeIndex < call.Types.Length; typeIndex++) {
-                TypeData type = call.Types[typeIndex];
+            // Store reordering of calls, to allow templates in the wrong order
+            string[] readLines = new string[call.OutCalls.Length];
+
+            for (int typeIndex = 0; typeIndex < call.OutCalls.Length; typeIndex++) {
+                var outCall = call.OutCalls[typeIndex];
+                var type = outCall.TypeData; 
                 var variableName = $"value{typeIndex}";
                 if (type.Kind is TypeDataKind.Parsable or TypeDataKind.SpanParsable) {
                     var method = type.Kind == TypeDataKind.SpanParsable ? "GetSpanParsable" : "GetParsable";
-                    code.AddLine($"{variableName} = instance.{method}<{type.FullName}>();");
+                    readLines[outCall.ReadIndex] = $"{variableName} = instance.{method}<{type.FullName}>();";
                 }
                 else if (type.Kind is TypeDataKind.Array or TypeDataKind.List) {
                     var method = type.InnerType?.Kind == TypeDataKind.SpanParsable ? "GetSpanParsableList" : "GetParsableList";
                     var convertMethod = type.Kind == TypeDataKind.Array ? ".ToArray()" : "";
-                    code.AddLine($"{variableName} = instance.{method}<{type.InnerType?.FullName}>({EscapeString(type.ListSeparator!)}){convertMethod};");
+                    readLines[outCall.ReadIndex] = $"{variableName} = instance.{method}<{type.InnerType?.FullName}>({EscapeString(outCall.ListSeparator!)}){convertMethod};";
                 }
+            }
+
+            foreach (var line in readLines) {
+                code.AddLine(line);
             }
 
             code.EndBlock();

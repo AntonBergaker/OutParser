@@ -11,6 +11,14 @@ namespace OutParser.Generator;
 internal static class SyntaxReading {
     private const string ParseMethodName = "OutParsing.OutParser.Parse";
 
+    private class PatternData(string reducedPattern, string separator, int count) {
+        public TypeData? TypeData {get; set; }
+        public string ReducedPattern { get; } = reducedPattern;
+        public string Separator { get; } = separator;
+        public int Count {get; set; } = count;
+        public int Index {get; set; }
+    }
+
     public static ParserCall? GetParserCall(SyntaxNode node, SemanticModel model, IParserCallReporter reporter, CancellationToken token) {
         if (model.GetOperation(node, token) is not IInvocationOperation operation) {
             return null;
@@ -25,11 +33,11 @@ internal static class SyntaxReading {
         }
         var templateArgument = operation.Arguments[1].Value;
         if (templateArgument is not ILiteralOperation literalOperation) {
-            reporter.ReportTemplateNotLiteral(templateArgument);
+            reporter.ReportTemplateNotLiteral(templateArgument.Syntax.GetLocation());
             return null;
         }
         if (literalOperation.ConstantValue.HasValue == false) {
-            reporter.ReportTemplateNotLiteral(templateArgument);
+            reporter.ReportTemplateNotLiteral(templateArgument.Syntax.GetLocation());
             return null;
         }
         var stringValue = literalOperation.ConstantValue.Value as string;
@@ -46,43 +54,64 @@ internal static class SyntaxReading {
 #pragma warning restore RSEXPERIMENTAL002 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 
         var (components, patterns) = GetTemplateComponents(stringValue);
-        var patternSet = new Dictionary<string, (string Separator, int Count)>();
-
+        var patternSet = new Dictionary<string, PatternData>();
+        var patternList = new List<PatternData>();
         foreach (var pattern in patterns) {
             var (reducedPattern, separator) = GetSeparatorFromPattern(pattern);
-            if (patternSet.TryGetValue(reducedPattern, out var found) && found.Count == 1) {
-                reporter.ReportPatternRepeats(literalOperation, reducedPattern);
-            }
-            patternSet[reducedPattern] = (separator, found.Count + 1);
+            if (patternSet.TryGetValue(reducedPattern, out var patternData) ) {
+                if (patternData.Count == 1) { // Only report once per pattern
+                    reporter.ReportPatternRepeats(literalOperation.Syntax.GetLocation(), reducedPattern);
+                }
+                patternData.Count += 1;
+                continue;
+            } 
+
+            patternData = new PatternData(reducedPattern, separator, 1);
+            patternSet.Add(reducedPattern, patternData);
+            patternList.Add(patternData);
+            
+            
         }
 
-        List<TypeData> types = new();
-        int index = 0;
+        int argumentIndex = 0;
         foreach (var argument in operation.Arguments.Skip(2)) {
-            var argumentName = argument.Parameter?.Name ?? "";
-
-            if (patternSet.TryGetValue(argumentName, out var pattern)) {
-                // Mark as consumed, so we can find unconsumed later.
-                patternSet[argumentName] = (pattern.Separator, -1);
-            } else {
-                reporter.ReportMissingPattern(argument.Syntax.Span, argumentName);
+            var argumentName = GetOutParameterName(argument);
+            if (argumentName == null) {
                 return null;
             }
 
-            var typeData = GetTypeData(argument.Parameter?.Type, argument.Syntax.Span, reporter, pattern.Separator);
-            if (typeData == null) {
+            if (patternSet.TryGetValue(argumentName, out var patternData) == false) {
+                reporter.ReportOutMissingPattern(argument.Syntax.GetLocation(), argumentName);
                 return null;
             }
-            types.Add(typeData);
+
+            patternData.TypeData = GetTypeData(argument.Parameter?.Type, argument.Syntax.GetLocation(), reporter);
+            patternData.Index = argumentIndex++;
         }
 
-        foreach (var pair in patternSet) {
-            if (pair.Value.Count != -1) {
-                reporter.ReportMissingOut(literalOperation.Syntax.Span, pair.Key);
+        foreach (var pattern in patternList) {
+            if (pattern.TypeData == null) {
+                reporter.ReportPatternMissingOut(literalOperation.Syntax.GetLocation(), pattern.ReducedPattern);
+                return null;
             }
         }
 
-        return new(types.ToArray(), components, location.Data);
+        // Order types based on templates
+
+        return new(patternList.Select(x => new OutCallData(x.Index, x.Separator, x.TypeData!)).ToArray(), components, location.Data);
+    }
+
+    private static string? GetOutParameterName(IArgumentOperation operation) {
+        if (operation.Syntax is not ArgumentSyntax syntax) {
+            return null;
+        }
+        if (syntax.Expression is not DeclarationExpressionSyntax expression) {
+            return null;
+        }
+        if (expression.Designation is not SingleVariableDesignationSyntax designation) {
+            return null;
+        }
+        return designation.Identifier.Text;
     }
 
     private static (string[] Components, string[] Templates) GetTemplateComponents(string value) {
@@ -131,7 +160,7 @@ internal static class SyntaxReading {
     /// </summary>
     /// <param name="type"></param>
     /// <returns></returns>
-    private static TypeData? GetTypeData(ITypeSymbol? type, TextSpan span, IParserCallReporter reporter, string separator) {
+    private static TypeData? GetTypeData(ITypeSymbol? type, Location location, IParserCallReporter reporter) {
         if (type == null) {
             return null;
         }
@@ -141,14 +170,14 @@ internal static class SyntaxReading {
         TypeDataKind kind = TypeDataKind.Parsable;
         if (type is IArrayTypeSymbol array) {
             kind = TypeDataKind.Array;
-            innerType = GetTypeData(array.ElementType, span, reporter, "");
+            innerType = GetTypeData(array.ElementType, location, reporter);
         }
         else if (type.OriginalDefinition?.ToString() == "System.Collections.Generic.List<T>") {
             if (type is not INamedTypeSymbol namedType) {
                 return null;
             }
             kind = TypeDataKind.List;
-            innerType = GetTypeData(namedType.TypeArguments[0], span, reporter, "");
+            innerType = GetTypeData(namedType.TypeArguments[0], location, reporter);
         }
         else {
             var spanParsableString = $"System.ISpanParsable<{typeName}>";
@@ -158,14 +187,14 @@ internal static class SyntaxReading {
                 var parsableString = $"System.IParsable<{typeName}>";
                 if (type.AllInterfaces.Any(i => i.ToString() == parsableString) == false) {
                     // If neither type of parsable, skip the type
-                    reporter.ReportTypeNotParsable(span, type.Name);
+                    reporter.ReportTypeNotParsable(location, type.Name);
                     return null;
                 }
             }
             kind = isSpanParsable ? TypeDataKind.SpanParsable : TypeDataKind.Parsable;
         }
 
-        return new(typeName, separator, kind, innerType);
+        return new(typeName, kind, innerType);
     }
 
     private static (string Pattern, string Separator) GetSeparatorFromPattern(string pattern) {
