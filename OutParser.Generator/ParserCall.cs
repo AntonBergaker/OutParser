@@ -2,8 +2,8 @@
 using System;
 
 namespace OutParser.Generator;
-internal class ParserCall(TypeData[] types, string[] components, string interceptLocation) : IEquatable<ParserCall?> {
-    public TypeData[] Types { get; } = types;
+internal class ParserCall(OutCallData[] outCalls, string[] components, string interceptLocation) : IEquatable<ParserCall?> {
+    public OutCallData[] OutCalls { get; } = outCalls;
     public string[] Components { get; } = components;
     public string InterceptLocation { get; } = interceptLocation;
 
@@ -13,14 +13,14 @@ internal class ParserCall(TypeData[] types, string[] components, string intercep
 
     public bool Equals(ParserCall? other) {
         return other is not null &&
-            Enumerable.SequenceEqual(Types, other.Types) &&
+            Enumerable.SequenceEqual(OutCalls, other.OutCalls) &&
             Enumerable.SequenceEqual(Components, other.Components);
     }
 
     public override int GetHashCode() {
         int hashCode = InterceptLocation.GetHashCode();
 
-        foreach (var t in Types) {
+        foreach (var t in OutCalls) {
             hashCode = hashCode * -1521134295 + t.GetHashCode();
         }
         foreach (var c in Components) {
@@ -38,4 +38,5 @@ public enum TypeDataKind {
     List,
 }
 
-internal record class TypeData(string FullName, string? ListSeparator, TypeDataKind Kind, TypeData? InnerType);
+internal record class OutCallData(int ReadIndex, string ListSeparator, TypeData TypeData);
+internal record class TypeData(string FullName, TypeDataKind Kind, TypeData? InnerType);

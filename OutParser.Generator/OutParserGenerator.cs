@@ -2,6 +2,7 @@
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
+using Microsoft.CodeAnalysis.Text;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -11,8 +12,6 @@ namespace OutParser.Generator;
 
 [Generator]
 public class OutParserGenerator : IIncrementalGenerator {
-    private const string ParseMethodName = "OutParsing.OutParser.Parse";
-
     public void Initialize(IncrementalGeneratorInitializationContext context) {
         context.RegisterPostInitializationOutput(InitializationOutput);
 
@@ -36,9 +35,6 @@ public class OutParserGenerator : IIncrementalGenerator {
             var typeParameters = string.Join(", ", Enumerable.Range(0, i).Select(j => $"T{j}"));
             var outParameters = string.Join(", ", Enumerable.Range(0, i).Select(j => $"out T{j} value{j}"));
             codeBuilder.StartBlock($"public static void Parse<{typeParameters}>(string input, string template, {outParameters})");
-            for (int j = 0; j < i; j++) {
-                codeBuilder.AddLine($"value{j} = default!;");
-            }
             codeBuilder.AddLine("throw new global::System.NotImplementedException(\"OutParser parse call is not implemented. This means the OutParser Generator was unable to emit any code. Please check your build output for errors.\");");
             codeBuilder.EndBlock();
         }
@@ -56,141 +52,20 @@ public class OutParserGenerator : IIncrementalGenerator {
         return invocation.ArgumentList.Arguments.Count > 0;
     }
 
+    private class ParseCallReporter : IParserCallReporter {
+        public void ReportPatternMissingOut(Location location, string key) { }
+
+        public void ReportOutMissingPattern(Location location, string argumentName) { }
+
+        public void ReportPatternRepeats(Location location, string template) { }
+
+        public void ReportTemplateNotLiteral(Location location) { }
+
+        public void ReportTypeNotParsable(Location location, string name) { }
+    }
+
     private ParserCall? FindParseCallsTransform(GeneratorSyntaxContext context, CancellationToken token) {
-        if (context.SemanticModel.GetOperation(context.Node, token) is not IInvocationOperation operation) {
-            return null;
-        }
-
-        var symbolInfo = context.SemanticModel.GetSymbolInfo(context.Node, token);
-
-        // Starts with Parse<
-        if ((symbolInfo.Symbol?.ToDisplayString().StartsWith($"{ParseMethodName}<") ?? false) == false) {
-            return null;
-        }
-        if (operation.Arguments.Length <= 1) {
-            return null;
-        }
-        var templateArgument = operation.Arguments[1].Value;
-        if (templateArgument is not ILiteralOperation literalOperation) {
-            return null;
-        }
-        if (literalOperation.ConstantValue.HasValue == false) {
-            return null;
-        }
-        var stringValue = literalOperation.ConstantValue.Value as string;
-        if (stringValue == null) {
-            return null;
-        }
-
-        var invocation = (InvocationExpressionSyntax)context.Node;
-#pragma warning disable RSEXPERIMENTAL002 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-        var location = context.SemanticModel.GetInterceptableLocation(invocation);
-        if (location == null) {
-            return null;
-        }
-#pragma warning restore RSEXPERIMENTAL002 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-
-
-        List<string> components = new();
-        List<string> templates = new();
-
-        int startIndex = 0;
-        while (true) {
-            int open = FindNextNonDupeChar(stringValue, '{', startIndex);
-            if (open == -1) {
-                break;
-            }
-            var close = FindNextNonDupeChar(stringValue, '}', open+1);
-            if (close == -1) {
-                break;
-            }
-
-            templates.Add(stringValue.Substring(open+1, close-1 - open));
-            components.Add(stringValue.Substring(startIndex, open - startIndex));
-
-            startIndex = close + 1;
-        }
-        if (startIndex < stringValue.Length) {
-            components.Add(stringValue.Substring(startIndex, stringValue.Length - startIndex));
-        }
-
-        List<TypeData> types = new();
-        int index = 0;
-        foreach (var argument in operation.Arguments.Skip(2)) {
-            var typeData = GetTypeData(argument.Parameter?.Type, templates[index++]);
-            if (typeData == null) {
-                return null;
-            }
-            types.Add(typeData);
-        }
-
-        return new(types.ToArray(), components.ToArray(), location.Data);
-    }
-
-    private int FindNextNonDupeChar(string @string, char @char, int startIndex) {
-        while (true) {
-            var next = @string.IndexOf(@char, startIndex);
-            if (next == -1) {
-                return -1;
-            }
-            if (Utils.GetCharSafe(@string, next + 1) == @char) {
-                startIndex = next + 1;
-                continue;
-            }
-            return next;
-        }
-    }
-
-    /// <summary>
-    /// Returns TypeData if it makes sense to generate it
-    /// </summary>
-    /// <param name="type"></param>
-    /// <returns></returns>
-    private TypeData? GetTypeData(ITypeSymbol? type, string template) {
-        if (type == null) {
-            return null;
-        }
-        var typeName = type.ToString();
-        string? listSeparator = null;
-        TypeData? innerType = null;
-
-        TypeDataKind kind = TypeDataKind.Parsable;
-        if (type is IArrayTypeSymbol array) {
-            kind = TypeDataKind.Array;
-            listSeparator = GetSeparatorFromTemplate(template);
-            innerType = GetTypeData(array.ElementType, template);
-        }
-        else if (type.OriginalDefinition?.ToString() == "System.Collections.Generic.List<T>") {
-            if (type is not INamedTypeSymbol namedType) {
-                return null;
-            }
-            kind = TypeDataKind.List;
-            listSeparator = GetSeparatorFromTemplate(template);
-            innerType = GetTypeData(namedType.TypeArguments[0], template);
-        }
-        else {
-            var spanParsableString = $"System.ISpanParsable<{typeName}>";
-            bool isSpanParsable = type.AllInterfaces.Any(i => i.ToString() == spanParsableString);
-
-            if (isSpanParsable == false) { // span parsable has priority, so only check for normal parsable as fallback
-                var parsableString = $"System.IParsable<{typeName}>";
-                if (type.AllInterfaces.Any(i => i.ToString() == parsableString) == false) {
-                    // If neither type of parsable, skip the type
-                    return null;
-                }
-            }
-            kind = isSpanParsable ? TypeDataKind.SpanParsable : TypeDataKind.Parsable;
-        }
-
-        return new(typeName, listSeparator, kind, innerType);
-    }
-
-    private string GetSeparatorFromTemplate(string template) {
-        var colonIndex = template.IndexOf(':');
-        if (colonIndex == -1) {
-            return "";
-        }
-        return template.Substring(colonIndex + 1);
+        return SyntaxReading.GetParserCall(context.Node, context.SemanticModel, new ParseCallReporter(), token);
     }
 
     private void EmitParseCallsCode(SourceProductionContext context, ImmutableArray<ParserCall> parserCalls) {
@@ -202,26 +77,37 @@ public class OutParserGenerator : IIncrementalGenerator {
 
         int index = 0;
         foreach (var call in parserCalls) {
+            if (context.CancellationToken.IsCancellationRequested) {
+                return;
+            }
             code.AddLine($"[System.Runtime.CompilerServices.InterceptsLocationAttribute(1, \"{call.InterceptLocation}\")]");
-            var outCalls = string.Join(", ", call.Types.Select((x, i) => $"out {x.FullName} value{i}"));
+            var outCalls = string.Join(", ", call.OutCalls.Select((x, i) => $"out {x.TypeData.FullName} value{i}"));
             code.StartBlock($"public static void ParseIntercept{index++}(string input, string template, {outCalls})");
 
             code.AddLine("var instance = new OutParserInstance(input, [");
             code.AddLine(string.Join(",", call.Components.Select(x => '\t' + EscapeString(x))));
             code.AddLine("]);");
 
-            for (int typeIndex = 0; typeIndex < call.Types.Length; typeIndex++) {
-                TypeData type = call.Types[typeIndex];
+            // Store reordering of calls, to allow templates in the wrong order
+            string[] readLines = new string[call.OutCalls.Length];
+
+            for (int typeIndex = 0; typeIndex < call.OutCalls.Length; typeIndex++) {
+                var outCall = call.OutCalls[typeIndex];
+                var type = outCall.TypeData; 
                 var variableName = $"value{typeIndex}";
                 if (type.Kind is TypeDataKind.Parsable or TypeDataKind.SpanParsable) {
                     var method = type.Kind == TypeDataKind.SpanParsable ? "GetSpanParsable" : "GetParsable";
-                    code.AddLine($"{variableName} = instance.{method}<{type.FullName}>();");
+                    readLines[outCall.ReadIndex] = $"{variableName} = instance.{method}<{type.FullName}>();";
                 }
                 else if (type.Kind is TypeDataKind.Array or TypeDataKind.List) {
                     var method = type.InnerType?.Kind == TypeDataKind.SpanParsable ? "GetSpanParsableList" : "GetParsableList";
                     var convertMethod = type.Kind == TypeDataKind.Array ? ".ToArray()" : "";
-                    code.AddLine($"{variableName} = instance.{method}<{type.InnerType?.FullName}>({EscapeString(type.ListSeparator!)}){convertMethod};");
+                    readLines[outCall.ReadIndex] = $"{variableName} = instance.{method}<{type.InnerType?.FullName}>({EscapeString(outCall.ListSeparator!)}){convertMethod};";
                 }
+            }
+
+            foreach (var line in readLines) {
+                code.AddLine(line);
             }
 
             code.EndBlock();
