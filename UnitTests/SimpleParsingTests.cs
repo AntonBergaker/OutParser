@@ -20,12 +20,6 @@ public class SimpleParsingTests {
             out int x, out int y
         );
 
-        OutParser.Parse(
-            "x=1",
-            "x={myCoolValue}",
-            out char myCoolValue
-        );
-
         Assert.AreEqual(512, x);
         Assert.AreEqual(123, y);
     }
