@@ -31,6 +31,8 @@ namespace OutParsing {
 
 namespace System.Runtime.CompilerServices {
 	[AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
-	file sealed class InterceptsLocationAttribute(int version, string data) : Attribute {
-	}
+#pragma warning disable CS9113 // Parameter is unread.
+    file sealed class InterceptsLocationAttribute(int version, string data) : Attribute {
+#pragma warning restore CS9113 // Parameter is unread.
+    }
 }
