@@ -9,6 +9,7 @@ using System.Threading;
 
 namespace OutParser.Generator;
 internal static class SyntaxReading {
+    private const string TryParseMethodName = "OutParsing.OutParser.TryParse";
     private const string ParseMethodName = "OutParsing.OutParser.Parse";
 
     private class PatternData(string reducedPattern, string separator, int count, int readIndex) {
@@ -25,10 +26,18 @@ internal static class SyntaxReading {
             return null;
         }
 
+        bool isTryParse;
+        var methodName = operation.TargetMethod.ToDisplayString().ToString();
         // Starts with Parse<
-        if (operation.TargetMethod.ToDisplayString().ToString().StartsWith($"{ParseMethodName}<") == false) {
+        if (methodName.StartsWith($"{ParseMethodName}<")) {
+            isTryParse = false;
+        } else if (methodName.StartsWith($"{TryParseMethodName}<")) {
+            isTryParse = true;
+        } else {
             return null;
         }
+
+
         if (operation.Arguments.Length <= 1) {
             return null;
         }
@@ -100,7 +109,7 @@ internal static class SyntaxReading {
         patternList.Sort((a, b) => a.ParameterIndex - b.ParameterIndex);
         outCallDataList.AddRange(patternList.Select(x => new OutCallData(x.ReadIndex, x.Separator, x.TypeData!)));
 
-        return new(outCallDataList.ToArray(), components, location.Data);
+        return new(outCallDataList.ToArray(), components, isTryParse, location.Data);
     }
 
     private static string? GetOutParameterName(IArgumentOperation operation) {
@@ -165,6 +174,9 @@ internal static class SyntaxReading {
     private static TypeData? GetTypeData(ITypeSymbol? type, Location location, IParserCallReporter reporter) {
         if (type == null) {
             return null;
+        }
+        if (type.NullableAnnotation == NullableAnnotation.Annotated) {
+            type = type.WithNullableAnnotation(NullableAnnotation.NotAnnotated);
         }
         var typeName = type.ToString();
         TypeData? innerType = null;
