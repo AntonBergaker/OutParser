@@ -40,7 +40,7 @@ public class OutParserGenerator : IIncrementalGenerator {
         codeBuilder.AddLine("public static bool TryParse(string input, string template) { return true; }");
         for (int i = 1; i <= 12; i++) {
             var typeParameters = string.Join(", ", Enumerable.Range(0, i).Select(j => $"T{j}"));
-            var outParameters = string.Join(", ", Enumerable.Range(0, i).Select(j => $"[System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out T{j} value{j}"));
+            var outParameters = string.Join(", ", Enumerable.Range(0, i).Select(j => $"[System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out T{j} value{j}"));
             codeBuilder.StartBlock($"public static bool TryParse<{typeParameters}>(string input, string template, {outParameters})");
             codeBuilder.AddLine("throw new global::System.NotImplementedException(\"OutParser TryParse call is not implemented. This means the OutParser Generator was unable to emit any code. Please check your build output for errors.\");");
             codeBuilder.EndBlock();
@@ -89,9 +89,17 @@ public class OutParserGenerator : IIncrementalGenerator {
             }
             code.AddLine($"[System.Runtime.CompilerServices.InterceptsLocationAttribute(1, \"{call.InterceptLocation}\")]");
             var methodSignature = call.IsTryParse ? "bool TryParseIntercept" : "void ParseIntercept";
-            var maybeNull = call.IsTryParse ? "[System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] " : "";
+            var maybeNull = call.IsTryParse ? "[System.Diagnostics.CodeAnalysis.NotNullWhen(true)] " : "";
             var outCalls = string.Join(", ", call.OutCalls.Select((x, i) => $"{maybeNull}out {x.TypeData.FullName} value{i}"));
             code.StartBlock($"public static {methodSignature}{index++}(string input, string template, {outCalls})");
+
+            // If try parse, set all to default so we can exit as soon as we fail one.
+            if (call.IsTryParse) {
+                for (int typeIndex = 0; typeIndex < call.OutCalls.Length; typeIndex++) {
+                    var outCall = call.OutCalls[typeIndex];
+                    code.AddLine($"value{typeIndex} = default;");
+                }
+            }
 
             code.AddLine("var instance = new OutParserInstance(input, [");
             code.AddLine(string.Join(",", call.Components.Select(x => '\t' + EscapeString(x))));
@@ -164,7 +172,7 @@ public class OutParserGenerator : IIncrementalGenerator {
             return $"if (instance.{method}<{type.InnerType?.FullName}>({EscapeString(outCall.ListSeparator!)}, out {variableName}) == false) return false;";
         }
         if (type.Kind is TypeDataKind.Array) {
-            return $"if (instance.{method}<{type.InnerType?.FullName}>({EscapeString(outCall.ListSeparator!)}, out var {variableName}List)) {variableName} = {variableName}.ToArray(); else return false;";
+            return $"if (instance.{method}<{type.InnerType?.FullName}>({EscapeString(outCall.ListSeparator!)}, out var {variableName}List)) {variableName} = {variableName}List.ToArray(); else return false;";
         }
         throw new Exception("Unimplemented type kind");
     }

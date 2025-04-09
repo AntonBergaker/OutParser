@@ -78,4 +78,15 @@ public class SimpleParsingTests {
         Assert.AreEqual(4, value1);
         Assert.AreEqual(9, value2);
     }
+
+    [Test]
+    public void TypeParameters() {
+        OutParser.Parse<int>(
+            "I have 69 rubber ducks",
+            "I have {x} rubber ducks",
+            out var x
+        );
+
+        Assert.AreEqual(69, x);
+    }
 }

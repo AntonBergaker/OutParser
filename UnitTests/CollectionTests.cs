@@ -34,4 +34,18 @@ internal class CollectionTests {
 
         Assert.AreEqual(new int[] { 1, 2, 4, 8, 16 }, list);
     }
+
+    [Test]
+    public void TryIntArray() {
+        if (OutParser.TryParse(
+            "1,2,4,8,16",
+            "{array:,}",
+            out int[]? array
+        ) == false) {
+            Assert.Fail("Failed to parse int array");
+            return;
+        }
+
+        Assert.AreEqual(new int[] { 1, 2, 4, 8, 16 }, array);
+    }
 }
