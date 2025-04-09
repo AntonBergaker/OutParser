@@ -26,4 +26,12 @@ public class TryParseTests {
         Assert.IsFalse(success);
     }
 
+    [Test]
+    public void MultipleVariables() {
+        var success = OutParser.TryParse("I eat potato and meatballs", "I eat {food0} and {food1}", out string? food0, out string? food1);
+
+        Assert.IsTrue(success);
+        Assert.AreEqual("potato", food0);
+        Assert.AreEqual("meatballs", food1);
+    }
 }

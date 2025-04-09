@@ -112,13 +112,21 @@ internal static class SyntaxReading {
     }
 
     private static string? GetOutParameterName(IArgumentOperation operation) {
-        if (operation.Syntax is not ArgumentSyntax syntax) {
+        if (operation.Syntax is not ArgumentSyntax argument) {
             return null;
         }
-        if (syntax.Expression is not DeclarationExpressionSyntax expression) {
+        // Discard with no type
+        if (argument.Expression is IdentifierNameSyntax { Identifier.Value: "_"}) {
+            return "_";
+        }
+        if (argument.Expression is not DeclarationExpressionSyntax declaration) {
             return null;
         }
-        if (expression.Designation is not SingleVariableDesignationSyntax designation) {
+        // Discard with type
+        if (declaration.Designation is DiscardDesignationSyntax) {
+            return "_";
+        }
+        if (declaration.Designation is not SingleVariableDesignationSyntax designation) {
             return null;
         }
         return designation.Identifier.Text;
